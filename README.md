@@ -290,11 +290,118 @@ The labels 100+X still correspond to the vertebra's IVD and 200+X the respective
 
 ## Using the Code
 
-If you want to call the code snippets yourself, start by initializing your models using `seg_model.get_segmentation_model()` giving it the absolute path to your model folder.
+### Main entrypoints
 
-Depending on whether you want to process a single sample or a whole dataset, go into `seg_run.py` and run either `process_img_nii()` or `process_dataset()`.
+- **CLI pipeline**: `entrypoint.py` / installed console script `spineps`  
+  - `spineps sample` → run the full two‑stage pipeline on a single `.nii.gz` file.  
+  - `spineps dataset` → run the full pipeline over a BIDS‑style dataset directory.
+- **Full Python pipeline**: `seg_run.py`  
+  - `process_img_nii(img_ref, model_semantic, model_instance, model_labeling, ...)` – full semantic + instance + optional labeling + centroids + snapshot for one scan.  
+  - `process_dataset(dataset_path, model_instance, model_semantic, model_labeling, ...)` – same, but for a whole dataset.
+- **Low‑level nnU‑Net inference API**: `spineps/utils/inference_api.py`  
+  - `load_inf_model(model_folder, step_size=0.5, ddevice="cuda", ...)` – load an nnU‑Net style segmentation model from a trained model folder.  
+  - `run_inference(input_nii, predictor, reorient_PIR=False)` – run sliding‑window prediction on one image (or list of images) and return the segmentation and softmax logits.
 
-If you want to perform even more detailed changes or code injections, see `process_img_nii()` as inspiration on how the underlaying functions work and behave. Treat with care!
+### Python API examples
+
+#### 1. Run a single nnU‑Net model via `inference_api`
+
+```python
+from pathlib import Path
+
+from TPTBox import NII
+from spineps.utils.inference_api import load_inf_model, run_inference
+
+# Path to a trained nnU-Net-style model folder (with fold_*/, plans.json, dataset.json, etc.)
+model_dir = Path("/path/to/model_folder")
+
+# Load predictor (GPU by default)
+predictor = load_inf_model(
+    model_folder=model_dir,
+    step_size=0.5,   # sliding-window step size
+    ddevice="cuda",  # or "cpu" / "mps"
+)
+
+# Load input image as NII
+img = NII.load("/path/to/input.nii.gz", seg=False)
+
+# Run inference
+seg_nii, softmax_logits = run_inference(img, predictor)
+
+# Save segmentation
+seg_nii.save("/path/to/output_seg.nii.gz")
+```
+
+You can pass a list of `NII` objects as `input_nii` to `run_inference` to handle multi‑channel inputs.
+
+#### 2. Run the full SPINEPS pipeline on a single scan
+
+```python
+from pathlib import Path
+
+from TPTBox import BIDS_FILE
+from spineps.get_models import get_semantic_model, get_instance_model, get_labeling_model
+from spineps.seg_run import process_img_nii
+
+input_path = Path("/path/to/sub-0001_T2w.nii.gz").absolute()
+bids_sample = BIDS_FILE(str(input_path), dataset=str(input_path.parent), verbose=True)
+
+model_semantic = get_semantic_model("t2w").load()
+model_instance = get_instance_model("instance").load()
+model_labeling = get_labeling_model("t2w_labeling").load()
+
+output_paths, errcode = process_img_nii(
+    img_ref=bids_sample,
+    model_semantic=model_semantic,
+    model_instance=model_instance,
+    model_labeling=model_labeling,
+    derivative_name="derivatives_seg",
+)
+```
+
+This mirrors what the CLI does in `entrypoint.py` (`run_sample`), but gives you full control over arguments and allows custom post‑processing or injections.
+
+### VRAM and performance tuning
+
+For environments with limited GPU memory, the following environment variables are supported:
+
+- **`SPINEPS_LOW_VRAM`** (e.g. `1`, `true`, `yes`):  
+  Enables a low‑VRAM mode in the nnU‑Net predictor (`load_inf_model`), reducing how much of the sliding‑window inference runs fully on GPU.
+- **`SPINEPS_MAX_FOLDS`** (integer, e.g. `1` or `2`):  
+  Limits the number of nnU‑Net folds that are loaded and used for inference. Fewer folds reduce memory and runtime at the cost of slightly less ensembling.
+- **`SPINEPS_PROFILE_GPU`** (e.g. `1`, `true`, `yes`):  
+  Enables lightweight GPU memory logging at key pipeline stages (model load, before/after semantic & instance inference) to help inspect allocated vs reserved VRAM.
+
+These options are optional; if unset, SPINEPS behaves as in the default published version.
+
+**How to set them:**
+
+- **Windows Command Prompt (cmd)** — use `set` (no spaces around `=`):
+  ```cmd
+  set SPINEPS_LOW_VRAM=1
+  set SPINEPS_MAX_FOLDS=2
+  set SPINEPS_PROFILE_GPU=1
+  spineps sample -i path\to\image.nii.gz -ms t2w -mv instance
+  ```
+- **Windows PowerShell** — use `$env:`:
+  ```powershell
+  $env:SPINEPS_LOW_VRAM="1"
+  $env:SPINEPS_MAX_FOLDS="2"
+  $env:SPINEPS_PROFILE_GPU="1"
+  spineps sample -i path\to\image.nii.gz -ms t2w -mv instance
+  ```
+- **When SPINEPS is run from your own Python script** (e.g. `python inference_api.py`): set the variables in Python **before** importing or calling spineps:
+  ```python
+  import os
+  os.environ["SPINEPS_LOW_VRAM"] = "1"
+  os.environ["SPINEPS_MAX_FOLDS"] = "2"   # optional: fewer folds
+  os.environ["SPINEPS_PROFILE_GPU"] = "1"  # optional: log GPU memory
+
+  # Now import and run spineps (e.g. entry_point, process_img_nii, or subprocess)
+  from spineps.entrypoint import entry_point
+  # ...
+  ```
+  Do **not** type `os.environ[...]` in the cmd/PowerShell window — that is Python code and only works inside a Python script or interpreter.
 
 
 ## Authorship

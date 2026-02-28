@@ -19,6 +19,7 @@ from spineps.seg_model import Segmentation_Model
 from spineps.seg_pipeline import logger, predict_centroids_from_both
 from spineps.seg_utils import Modality_Pair, check_input_model_compatibility, check_model_modality_acquisition, find_best_matching_model
 from spineps.utils.citation_reminder import citation_reminder
+from spineps.utils.gpu_profile import log_gpu_memory, reset_peak_stats
 
 
 @citation_reminder
@@ -383,6 +384,8 @@ def process_img_nii(  # noqa: C901
     file_dir = img_ref.file["nii.gz"]
 
     logger.print("Processing", file_dir.name)
+    log_gpu_memory("process_img_nii_start")
+    reset_peak_stats()
     with logger:
         if verbose:
             model_semantic.logger.default_verbose = True
@@ -398,6 +401,7 @@ def process_img_nii(  # noqa: C901
 
         # First stage
         if not out_spine_raw.exists() or override_semantic:
+            log_gpu_memory("before_semantic_inference")
             input_preprocessed, errcode = preprocess_input(
                 input_nii,
                 pad_size=proc_pad_size,
@@ -440,6 +444,7 @@ def process_img_nii(  # noqa: C901
                     seg_nii_modelres.save(out_spine_raw, verbose=logger)
                 if save_softmax_logits and isinstance(softmax_logits, np.ndarray):
                     save_nparray(softmax_logits, out_logits)
+            log_gpu_memory("after_semantic_inference")
             done_something = True
         else:
             logger.print("Subreg Mask already exists. Set -override_subreg to create it anew")
@@ -448,6 +453,7 @@ def process_img_nii(  # noqa: C901
 
         # Second stage
         if not out_vert_raw.exists() or override_instance:
+            log_gpu_memory("before_instance_inference")
             whole_vert_nii, errcode = predict_instance_mask(
                 seg_nii_modelres.copy(),
                 model_instance,
@@ -467,6 +473,7 @@ def process_img_nii(  # noqa: C901
             logger.print("vert_out", whole_vert_nii.zoom, whole_vert_nii.orientation, whole_vert_nii.shape, verbose=verbose)
             if save_raw and not return_output_instead_of_save:
                 whole_vert_nii.save(out_vert_raw, verbose=logger)
+            log_gpu_memory("after_instance_inference")
             done_something = True
         else:
             logger.print("Vert Mask already exists. Set -override_vert to create it anew")

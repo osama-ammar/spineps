@@ -438,57 +438,91 @@ class nnUNetPredictor(object):
 
                 slicers = self._internal_get_sliding_window_slicers(data.shape[1:])
 
-                precision = torch.half if self.perform_everything_on_gpu else torch.float32
+                # High-VRAM mode: keep full volume and logits on GPU (fastest, more VRAM)
+                # Low-VRAM mode (self.perform_everything_on_gpu == False): keep volume & logits on CPU and
+                # only move one patch at a time to GPU.
+                if self.perform_everything_on_gpu:
+                    data_precision = torch.half if self.device.type == "cuda" else torch.float32
+                    results_precision = torch.half
+                    results_device = self.device
 
-                # preallocate results and num_predictions
-                results_device = self.device if self.perform_everything_on_gpu else torch.device("cpu")
-                if self.verbose:
-                    print("preallocating arrays")
-                try:
-                    data = data.to(self.device, dtype=precision)
-                    predicted_logits = torch.zeros(
-                        (self.label_manager.num_segmentation_heads, *data.shape[1:]),
-                        dtype=precision,
-                        device=results_device,
-                    )
-                    n_predictions = torch.zeros(data.shape[1:], dtype=precision, device=results_device)
-                    if self.use_gaussian:
-                        gaussian = compute_gaussian(
-                            tuple(self.configuration_manager.patch_size),
-                            sigma_scale=1.0 / 8,
-                            value_scaling_factor=1000,
+                    if self.verbose:
+                        print("preallocating arrays (everything on GPU)")
+                    try:
+                        data = data.to(self.device, dtype=data_precision)
+                        predicted_logits = torch.zeros(
+                            (self.label_manager.num_segmentation_heads, *data.shape[1:]),
+                            dtype=results_precision,
                             device=results_device,
                         )
-                except RuntimeError:
-                    # sometimes the stuff is too large for GPUs. In that case fall back to CPU
+                        n_predictions = torch.zeros(data.shape[1:], dtype=results_precision, device=results_device)
+                        if self.use_gaussian:
+                            gaussian = compute_gaussian(
+                                tuple(self.configuration_manager.patch_size),
+                                sigma_scale=1.0 / 8,
+                                value_scaling_factor=1000,
+                                device=results_device,
+                                dtype=results_precision,
+                            )
+                    except RuntimeError:
+                        # sometimes the stuff is too large for GPUs. In that case fall back to CPU results
+                        results_device = torch.device("cpu")
+                        data = data.to(results_device, dtype=data_precision)
+                        predicted_logits = torch.zeros(
+                            (self.label_manager.num_segmentation_heads, *data.shape[1:]),
+                            dtype=results_precision,
+                            device=results_device,
+                        )
+                        n_predictions = torch.zeros(data.shape[1:], dtype=results_precision, device=results_device)
+                        if self.use_gaussian:
+                            gaussian = compute_gaussian(
+                                tuple(self.configuration_manager.patch_size),
+                                sigma_scale=1.0 / 8,
+                                value_scaling_factor=1000,
+                                device=results_device,
+                                dtype=results_precision,
+                            )
+                    finally:
+                        empty_cache(self.device)
+                else:
+                    # Low-VRAM streaming mode: data and results on CPU, only patches on GPU
+                    data_precision = torch.float32
+                    results_precision = torch.float32
                     results_device = torch.device("cpu")
-                    data = data.to(results_device, dtype=precision)
+
+                    if self.verbose:
+                        print("preallocating arrays (low VRAM streaming)")
+                    data = data.to(results_device, dtype=data_precision)
                     predicted_logits = torch.zeros(
                         (self.label_manager.num_segmentation_heads, *data.shape[1:]),
-                        dtype=precision,
+                        dtype=results_precision,
                         device=results_device,
                     )
-                    n_predictions = torch.zeros(data.shape[1:], dtype=precision, device=results_device)
+                    n_predictions = torch.zeros(data.shape[1:], dtype=results_precision, device=results_device)
                     if self.use_gaussian:
                         gaussian = compute_gaussian(
                             tuple(self.configuration_manager.patch_size),
                             sigma_scale=1.0 / 8,
                             value_scaling_factor=1000,
                             device=results_device,
+                            dtype=results_precision,
                         )
-                finally:
-                    empty_cache(self.device)
 
                 if self.verbose:
                     print("running prediction")
                 for sl in tqdm(slicers, disable=not self.allow_tqdm):
-                    workon = data[sl][None]
-                    workon = workon.to(self.device, non_blocking=False)
+                    # Always take patch from CPU `data`; in high-VRAM mode `data` is on GPU so this is just a view,
+                    # in low-VRAM mode this copies only the current patch to GPU.
+                    workon = data[sl][None].to(self.device, non_blocking=False)
 
                     prediction = self._internal_maybe_mirror_and_predict(workon, network=network)[0].to(results_device)
 
-                    predicted_logits[sl] += prediction * gaussian if self.use_gaussian else prediction
-                    n_predictions[sl[1:]] += gaussian if self.use_gaussian else 1
+                    if self.use_gaussian:
+                        predicted_logits[sl] += prediction * gaussian
+                        n_predictions[sl[1:]] += gaussian
+                    else:
+                        predicted_logits[sl] += prediction
+                        n_predictions[sl[1:]] += 1
 
                 predicted_logits /= n_predictions
         # empty_cache(self.device)

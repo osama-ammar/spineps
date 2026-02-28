@@ -20,6 +20,7 @@ from spineps.get_models import (
 )
 from spineps.seg_run import process_dataset, process_img_nii
 from spineps.utils.citation_reminder import citation_reminder
+from spineps.utils.gpu_profile import log_gpu_memory
 
 logger = No_Logger(prefix="Init")
 
@@ -228,6 +229,7 @@ def run_sample(opt: Namespace):
         model_labeling = get_labeling_model(opt.model_labeling, use_cpu=opt.cpu).load()
 
     bids_sample = BIDS_FILE(input_path, dataset=dataset, verbose=True)
+    log_gpu_memory("after_all_models_loaded")
 
     kwargs = {
         "img_ref": bids_sample,

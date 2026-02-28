@@ -26,6 +26,7 @@ def load_inf_model(
     allow_non_final: bool = True,
     inference_augmentation: bool = False,
     verbose: bool = True,
+    low_vram: bool = False,
 ) -> nnUNetPredictor:
     """Loades the Nako-Segmentor Model Predictor
 
@@ -35,10 +36,14 @@ def load_inf_model(
         "the prediction. Default: 0.5. Cannot be larger than 1.
         ddevice (str, optional): The device the inference should run with. Available options are 'cuda' "
         "(GPU), 'cpu' (CPU) and 'mps' (Apple M1/M2). Do NOT use this to set which GPU ID!. Defaults to "cuda".
+        low_vram (bool, optional): If True, keep full-volume buffers on CPU (less GPU VRAM, slightly slower).
+            Can be enabled via env SPINEPS_LOW_VRAM=1. Defaults to False.
 
     Returns:
         predictor: Loaded model predictor object
     """
+    if os.environ.get("SPINEPS_LOW_VRAM", "").lower() in ("1", "true", "yes"):
+        low_vram = True
     if isinstance(model_folder, str):
         model_folder = Path(model_folder)
     if ddevice == "cpu":
@@ -60,11 +65,13 @@ def load_inf_model(
 
     assert model_folder.exists(), f"model-folder not found: got path {model_folder}"
 
+    perform_everything_on_gpu = (ddevice != "cpu") and not low_vram
+    use_mirroring = inference_augmentation and not low_vram  # disable TTA in low_vram to save VRAM
     predictor = nnUNetPredictor(
         tile_step_size=step_size,
         use_gaussian=True,
-        use_mirroring=inference_augmentation,  # <- mirroring augmentation!
-        perform_everything_on_gpu=ddevice != "cpu",
+        use_mirroring=use_mirroring,
+        perform_everything_on_gpu=perform_everything_on_gpu,
         device=device,
         verbose=False,
         verbose_preprocessing=False,

@@ -15,6 +15,7 @@ from spineps.architectures.pl_unet import PLNet
 from spineps.seg_enums import Acquisition, InputType, Modality, OutputType
 from spineps.utils.citation_reminder import citation_reminder
 from spineps.utils.filepaths import search_path
+from spineps.utils.gpu_profile import log_gpu_memory
 from spineps.utils.inference_api import load_inf_model, run_inference
 from spineps.utils.seg_modelconfig import Segmentation_Inference_Config, load_inference_config
 
@@ -268,19 +269,29 @@ class Segmentation_Model_NNunet(Segmentation_Model):
         global threads_started  # noqa: PLW0603
         if not os.path.exists(self.model_folder):  # noqa: PTH110
             self.print(f"Model weights not found in {self.model_folder}", Log_Type.FAIL)
+        use_folds = folds if folds is not None else tuple([str(i) for i in range(self.inference_config.available_folds)])
+        max_folds_env = os.environ.get("SPINEPS_MAX_FOLDS", "").strip()
+        if max_folds_env.isdigit():
+            n = min(len(use_folds), int(max_folds_env))
+            if n < len(use_folds):
+                use_folds = use_folds[:n]
+                self.print(f"SPINEPS_MAX_FOLDS={max_folds_env} -> using {n} fold(s) for lower VRAM", Log_Type.STRANGE)
+        low_vram = os.environ.get("SPINEPS_LOW_VRAM", "").lower() in ("1", "true", "yes")
         self.predictor = load_inf_model(
             model_folder=self.model_folder,
             step_size=self.inference_config.default_step_size,
-            use_folds=folds if folds is not None else tuple([str(i) for i in range(self.inference_config.available_folds)]),
+            use_folds=use_folds,
             inference_augmentation=self.inference_config.inference_augmentation,
             init_threads=not threads_started,
             allow_non_final=True,
             verbose=False,
             ddevice="cuda" if not self.use_cpu else "cpu",
+            low_vram=low_vram,
         )
         threads_started = True
         self.predictor.allow_tqdm = self.default_allow_tqdm
         self.predictor.verbose = False
+        log_gpu_memory(f"model_loaded nnunet {self.inference_config.log_name}")
         self.print("Model loaded from", self.model_folder, Log_Type.OK, verbose=True)
         return self
 

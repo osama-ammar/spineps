@@ -19,7 +19,7 @@ from spineps.seg_model import Segmentation_Model
 from spineps.seg_pipeline import logger, predict_centroids_from_both
 from spineps.seg_utils import Modality_Pair, check_input_model_compatibility, check_model_modality_acquisition, find_best_matching_model
 from spineps.utils.citation_reminder import citation_reminder
-from spineps.utils.gpu_profile import log_gpu_memory, reset_peak_stats
+from spineps.utils.gpu_profile import empty_cache, log_gpu_memory, reset_peak_stats
 
 
 @citation_reminder
@@ -445,6 +445,7 @@ def process_img_nii(  # noqa: C901
                 if save_softmax_logits and isinstance(softmax_logits, np.ndarray):
                     save_nparray(softmax_logits, out_logits)
             log_gpu_memory("after_semantic_inference")
+            empty_cache()
             done_something = True
         else:
             logger.print("Subreg Mask already exists. Set -override_subreg to create it anew")
@@ -474,6 +475,7 @@ def process_img_nii(  # noqa: C901
             if save_raw and not return_output_instead_of_save:
                 whole_vert_nii.save(out_vert_raw, verbose=logger)
             log_gpu_memory("after_instance_inference")
+            empty_cache()
             done_something = True
         else:
             logger.print("Vert Mask already exists. Set -override_vert to create it anew")

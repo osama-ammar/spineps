@@ -438,6 +438,9 @@ class nnUNetPredictor(object):
 
                 slicers = self._internal_get_sliding_window_slicers(data.shape[1:])
 
+                # Half precision for patches on GPU (saves VRAM and can be faster); only used in low-VRAM path
+                patch_dtype_gpu = torch.half if self.device.type == "cuda" else torch.float32
+
                 # High-VRAM mode: keep full volume and logits on GPU (fastest, more VRAM)
                 # Low-VRAM mode (self.perform_everything_on_gpu == False): keep volume & logits on CPU and
                 # only move one patch at a time to GPU.
@@ -485,7 +488,7 @@ class nnUNetPredictor(object):
                     finally:
                         empty_cache(self.device)
                 else:
-                    # Low-VRAM streaming mode: data and results on CPU, only patches on GPU
+                    # Low-VRAM streaming mode: data and results on CPU, only patches on GPU in half precision
                     data_precision = torch.float32
                     results_precision = torch.float32
                     results_device = torch.device("cpu")
@@ -511,9 +514,11 @@ class nnUNetPredictor(object):
                 if self.verbose:
                     print("running prediction")
                 for sl in tqdm(slicers, disable=not self.allow_tqdm):
-                    # Always take patch from CPU `data`; in high-VRAM mode `data` is on GPU so this is just a view,
-                    # in low-VRAM mode this copies only the current patch to GPU.
-                    workon = data[sl][None].to(self.device, non_blocking=False)
+                    # In high-VRAM mode data is on GPU; in low-VRAM mode copy patch to GPU in half precision
+                    if self.perform_everything_on_gpu:
+                        workon = data[sl][None].to(self.device, non_blocking=False)
+                    else:
+                        workon = data[sl][None].to(self.device, dtype=patch_dtype_gpu, non_blocking=False)
 
                     prediction = self._internal_maybe_mirror_and_predict(workon, network=network)[0].to(results_device)
 

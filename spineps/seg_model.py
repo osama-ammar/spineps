@@ -271,8 +271,10 @@ class Segmentation_Model_NNunet(Segmentation_Model):
             self.print(f"Model weights not found in {self.model_folder}", Log_Type.FAIL)
         use_folds = folds if folds is not None else tuple([str(i) for i in range(self.inference_config.available_folds)])
         max_folds_env = os.environ.get("SPINEPS_MAX_FOLDS", "").strip()
+        if not max_folds_env and os.environ.get("SPINEPS_LOW_VRAM", "").lower() in ("1", "true", "yes"):
+            max_folds_env = "1"  # default to 1 fold when low-VRAM mode is on
         if max_folds_env.isdigit():
-            n = min(len(use_folds), int(max_folds_env))
+            n = max(1, min(len(use_folds), int(max_folds_env)))
             if n < len(use_folds):
                 use_folds = use_folds[:n]
                 self.print(f"SPINEPS_MAX_FOLDS={max_folds_env} -> using {n} fold(s) for lower VRAM", Log_Type.STRANGE)

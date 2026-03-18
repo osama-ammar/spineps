@@ -216,7 +216,9 @@ def run_sample(opt: Namespace):
     else:
         model_semantic = get_semantic_model(opt.model_semantic, use_cpu=opt.cpu).load()
     # model instance
-    if "/" in str(opt.model_instance):
+    if opt.model_instance == "none":
+        model_instance = None
+    elif "/" in str(opt.model_instance):
         model_instance = get_actual_model(opt.model_instance, use_cpu=opt.cpu).load()
     else:
         model_instance = get_instance_model(opt.model_instance, use_cpu=opt.cpu).load()
@@ -290,7 +292,7 @@ def run_dataset(opt: Namespace):
         model_semantic = get_semantic_model(opt.model_semantic, use_cpu=opt.cpu).load()
 
     # Model Instance
-    if opt.model_instance == "auto":
+    if opt.model_instance == "none":
         model_instance = None
     elif "/" in str(opt.model_instance):
         model_instance = get_actual_model(opt.model_instance, use_cpu=opt.cpu).load()
